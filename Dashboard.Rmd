@@ -1,0 +1,738 @@
+---
+title: "Análisis viajeros pernoctaciones en España"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(MASS)
+library(flexdashboard)
+library(shinydashboard)
+library(highcharter) 
+library(fpp3)
+library(RColorBrewer)
+library(leaflet)  
+library(geojsonio) 
+library(plotly)
+library(ggplot2)
+library(tidyverse)
+library(urca)
+library(GGally)
+library(pxR)
+library(patchwork)
+library(DT)
+```
+
+```{r}
+geoj <- geojson_read("https://ctim.es/AEDV/data/geo_spain_autonomias.geojson",  what = "sp")
+geoj.tibble <- geoj %>%
+  as_tibble()
+```
+
+```{r,message=FALSE,echo=FALSE}
+#Primero creo una tabla con todos los datos
+
+datos <- read.px("2941.px")
+datos <- datos$DATA$value %>% as_tibble()
+datos_serie_temporal <- datos %>% 
+  mutate(Periodo = ym(Periodo))%>%
+  filter(Comunidades.y.Ciudades.Autónomas != "19 Melilla" & Comunidades.y.Ciudades.Autónomas != "18 Ceuta" & Tipo.de.alojamiento !=  "Albergues")
+tabla_alojamientos <- datos_serie_temporal %>% 
+  #filter(Comunidades.y.Ciudades.Autónomas != "Total Nacional", Viajeros.y.pernoctaciones == "Viajero", Residencia == "Total")%>%
+  pivot_wider( names_from = Tipo.de.alojamiento, values_from = value)
+tabla_alojamientos$Total = rowSums(tabla_alojamientos[, 5:8, drop = F], na.rm = T)
+datos_serie_temporal <- tabla_alojamientos %>%
+  pivot_longer(c(Hoteles, Campings, `Apartamentos turísticos`, `Alojamientos de turismo rural`, Total), names_to = "Tipo.de.alojamiento", values_to = "value")
+
+datos_serie_temporal <- datos_serie_temporal %>%
+  filter(Comunidades.y.Ciudades.Autónomas != "19 Melilla")
+datos_serie_temporal$Comunidades.y.Ciudades.Autónomas <- factor(datos_serie_temporal$Comunidades.y.Ciudades.Autónomas)
+datos_serie_temporal$Comunidades.y.Ciudades.Autónomas <- droplevels(datos_serie_temporal$Comunidades.y.Ciudades.Autónomas)
+
+datos_mapa_calor <- datos %>% 
+  mutate(Periodo = ym(Periodo))%>%
+  filter(Tipo.de.alojamiento !=  "Albergues")
+tabla_alojamientos <- datos_mapa_calor %>% 
+  pivot_wider( names_from = Tipo.de.alojamiento, values_from = value)
+tabla_alojamientos$Total = rowSums(tabla_alojamientos[, 5:8, drop = F], na.rm = T)
+datos_mapa_calor <- tabla_alojamientos %>%
+  pivot_longer(c(Hoteles, Campings, `Apartamentos turísticos`, `Alojamientos de turismo rural`, Total), names_to = "Tipo.de.alojamiento", values_to = "value")
+
+datos_analisis_atributos <- datos %>% 
+  mutate(Periodo = ym(Periodo))%>%
+  filter(Tipo.de.alojamiento !=  "Albergues" & Comunidades.y.Ciudades.Autónomas != "19 Melilla" & Comunidades.y.Ciudades.Autónomas != "18 Ceuta")
+tabla_alojamientos <- datos_analisis_atributos %>% 
+  pivot_wider( names_from = Tipo.de.alojamiento, values_from = value)
+tabla_alojamientos$Total = rowSums(tabla_alojamientos[, 5:8, drop = F], na.rm = T)
+datos_analisis_atributos <- tabla_alojamientos %>%
+  pivot_longer(c(Hoteles, Campings, `Apartamentos turísticos`, `Alojamientos de turismo rural`, Total), names_to = "Tipo.de.alojamiento", values_to = "value")
+
+comunidad <- datos %>%
+  mutate(Periodo = ym(Periodo))%>%
+  filter(Tipo.de.alojamiento != "Albergues")
+tabla_alojamientos <- comunidad %>% 
+  #filter(Comunidades.y.Ciudades.Autónomas != "Total Nacional", Viajeros.y.pernoctaciones == "Viajero", Residencia == "Total")%>%
+  pivot_wider( names_from = Tipo.de.alojamiento, values_from = value)
+tabla_alojamientos$Total = rowSums(tabla_alojamientos[, 5:8, drop = F], na.rm = T)
+comunidad <- tabla_alojamientos %>%
+  pivot_longer(c(Hoteles, Campings, `Apartamentos turísticos`, `Alojamientos de turismo rural`, Total), names_to = "Tipo.de.alojamiento", values_to = "value")
+
+datos_graficos <- datos %>% 
+  filter(Comunidades.y.Ciudades.Autónomas != "19 Melilla" & Comunidades.y.Ciudades.Autónomas != "18 Ceuta" & Tipo.de.alojamiento !=  "Albergues")%>%
+  mutate(Periodo = ym(Periodo))
+
+#Ahora creo una tabla para viajeros y otra para pernoctaciones
+
+viajeros_serie_temporal <- datos_serie_temporal %>%
+  filter(Viajeros.y.pernoctaciones == "Viajero", Residencia == "Total")
+
+pernoctaciones_serie_temporal <- datos_serie_temporal %>%
+  filter(Viajeros.y.pernoctaciones == "Pernoctaciones", Residencia == "Total")
+
+viajeros_mapa_calor <- datos_mapa_calor %>%
+  filter(Viajeros.y.pernoctaciones == "Viajero", Residencia == "Total", Comunidades.y.Ciudades.Autónomas != "Total Nacional")%>%
+  group_by(Comunidades.y.Ciudades.Autónomas, Tipo.de.alojamiento)%>%
+  dplyr::summarise(
+    Viajeros.y.pernoctaciones = first(Viajeros.y.pernoctaciones),
+    Residencia = first(Residencia),
+    Numero_viajeros = sum(na.omit(value))
+  )
+
+pernoctaciones_mapa_calor <- datos_mapa_calor %>%
+  filter(Viajeros.y.pernoctaciones == "Pernoctaciones", Residencia == "Total", Comunidades.y.Ciudades.Autónomas != "Total Nacional")%>%
+  group_by(Comunidades.y.Ciudades.Autónomas, Tipo.de.alojamiento)%>%
+  dplyr::summarise(
+    Viajeros.y.pernoctaciones = first(Viajeros.y.pernoctaciones),
+    Residencia = first(Residencia),
+    Numero_pernoctaciones = sum(na.omit(value))
+  )
+
+viajeros_analisis_atributos <- datos_analisis_atributos %>%
+  filter(Viajeros.y.pernoctaciones == "Viajero", Residencia == "Total", Comunidades.y.Ciudades.Autónomas != "Total Nacional")%>%
+  group_by(Comunidades.y.Ciudades.Autónomas, Tipo.de.alojamiento)%>%
+  dplyr::summarise(
+    Numero_viajeros = sum(na.omit(value))
+  ) %>%
+  pivot_wider( names_from = Tipo.de.alojamiento, values_from = Numero_viajeros) %>%
+  dplyr::rename(Hoteles_viajeros=Hoteles, `Alojamientos de turismo rural viajeros` = `Alojamientos de turismo rural`, `Apartamentos turísticos viajeros` = `Apartamentos turísticos`, Campings_viajeros = Campings, Total_viajeros = Total)
+
+pernoctaciones_analisis_atributos <- datos_analisis_atributos %>%
+  filter(Viajeros.y.pernoctaciones == "Pernoctaciones", Residencia == "Total", Comunidades.y.Ciudades.Autónomas != "Total Nacional")%>%
+  group_by(Comunidades.y.Ciudades.Autónomas, Tipo.de.alojamiento)%>%
+  dplyr::summarise(
+    Numero_pernoctaciones = sum(na.omit(value))
+  ) %>%
+  pivot_wider( names_from = Tipo.de.alojamiento, values_from = Numero_pernoctaciones) %>%
+  dplyr::rename(Hoteles_pernoctaciones=Hoteles, `Alojamientos de turismo rural pernoctaciones` = `Alojamientos de turismo rural`, `Apartamentos turísticos pernoctaciones` = `Apartamentos turísticos`, Campings_pernoctaciones = Campings, Total_pernoctaciones = Total)
+
+viajeros_y_pernoctaciones_analisis_atributos <- left_join(viajeros_analisis_atributos, pernoctaciones_analisis_atributos, by="Comunidades.y.Ciudades.Autónomas")
+
+#Hago un left join de mi tabla de datos al tibble del geojson. Pero primero creo una tabla con el HASC_1 de cada comunidad asociado a la comunidad para hacer un left_join a mi tabla, y luego hago el left join al geojson
+
+#Primero le añado una columna a las tablas con el HASC_1 de cada comunidad.
+
+code <- tibble(
+  HASC_1 = c(
+  "ES.AN", # Andalucía
+  "ES.AR", # Aragón
+  "ES.AS", # Asturias
+  "ES.PM", # Baleares
+  "ES.CN", # Canarias
+  "ES.CB", # Cantabria
+  "ES.CL", # Castilla y León
+  "ES.CM", # Castilla-La Mancha
+  "ES.CT", # Cataluña
+  "ES.VC", # Comunidad Valenciana
+  "ES.EX", # Extremadura
+  "ES.GA", # Galicia
+  "ES.MD", # Madrid
+  "ES.MU", # Murcia
+  "ES.NA", # Navarra
+  "ES.PV", # País Vasco
+  "ES.LO", # La Rioja
+  "ES.ML", #
+  "ES.ML" #
+),
+  Comunidad.Autónoma = unique(viajeros_mapa_calor$Comunidades.y.Ciudades.Autónomas)
+)
+
+ viajeros_mapa_calor <- left_join(viajeros_mapa_calor, code, join_by(Comunidades.y.Ciudades.Autónomas ==  Comunidad.Autónoma))
+ pernoctaciones_mapa_calor <- left_join(pernoctaciones_mapa_calor, code, join_by(Comunidades.y.Ciudades.Autónomas ==  Comunidad.Autónoma))
+ pernoctaciones_mapa_calor <- pernoctaciones_mapa_calor[, -(1:4)]
+ geoj.tibble.total <- left_join(geoj.tibble, viajeros_mapa_calor, by= "HASC_1")
+ tabla_intermedia <- left_join(geoj.tibble, pernoctaciones_mapa_calor, by= "HASC_1")
+ geoj.tibble.total <- cbind(geoj.tibble.total, tabla_intermedia$Numero_pernoctaciones)
+ geoj.tibble.total$Viajeros.y.pernoctaciones <- NULL
+colnames(geoj.tibble.total)[16] <- "Numero_pernoctaciones"
+geoj.tibble.total <- geoj.tibble.total %>%
+   filter(Comunidades.y.Ciudades.Autónomas != "18 Ceuta")
+geoj.tibble.total$Numero_viajeros[34] = geoj.tibble.total$Numero_viajeros[34] +1575022
+geoj.tibble.total$Numero_viajeros[35] = geoj.tibble.total$Numero_viajeros[35] + 1575022
+geoj.tibble.total$Numero_pernoctaciones[34] = geoj.tibble.total$Numero_pernoctaciones[34] +3508389
+geoj.tibble.total$Numero_pernoctaciones[35] = geoj.tibble.total$Numero_pernoctaciones[35] + 3508389
+```
+
+```{r}
+#Campo para seleccionar comunidades autónomas
+comunidades <- levels(as.factor(viajeros_serie_temporal$Comunidades.y.Ciudades.Autónomas))
+
+#Campo para seleccionar las fechas
+
+fechas <- levels(as.factor(viajeros_serie_temporal$Periodo))
+```
+
+
+Datos
+===============================
+
+## Sidebar {.sidebar data-width=230}
+
+
+**Periodo:** Fecha en formato yyyyMmm que nos dice cuándo se obtuvieron los valores obtenidos.
+
+**Viajeros y pernoctaciones:** Nos dice si los datos son sobre viajeros, personas que vienen a España a alojarse, o pernoctaciones, número de noches que una persona pasa en un lugar en específico.
+
+**Residencia:** Nos dice cuál es la residencia de las personas que se toman los datos. Pueden ser Total, residentes en España o Residentes en el Extranjero.
+
+**Tipo de alojamiento:** Nos dice el tipo de alojamiento en el que se aloja la persona. Los diferentes tipos son Hoteles, Campings, Apartamentos turísticos, Alojamientos de turismo rural y Albergues. Para este análisis, como se tenían muy pocos datos de personas que se alojan en albergues, se a descartado esta variable y en ciertos casos se a implementado la variable total.
+
+**Comunidades y ciudades autónomas** Nos dice la comunidad autónoma en la que se ha alojado la persona. Esta variable nos ofrece todas las comunidades autónomas y un total nacional. En ciertas ocasiones se han descartado las comunidades de Ceuta y Melilla debido a la poca información que ofrecen.
+
+**Value:** Según las combinaciones de las variables anteriores, representa el valor que se obtuvo en la recogida de datos sobre el número de viajeros o pernoctaciones en cada caso.
+
+Column
+-------------
+
+###
+
+```{r}
+
+  datatable(datos, 
+          options = list(dom = 't', ordering = FALSE),
+          rownames = FALSE,
+          class = 'display nowrap compact',
+          extensions = 'Buttons',
+          filter = "top")
+
+```
+
+
+Gráficos
+================================
+
+Column {.sidebar data-width=230}
+-----------------------------------------------------------------------
+
+```{r}
+selectInput(
+  "ComunidadAutonoma", 
+  label = "Selecciona una comunidad autónoma para el diagrama circular:",
+  choices = levels(as.factor(datos$Comunidades.y.Ciudades.Autónomas)), 
+  selected = "Total Nacional"
+)
+
+selectInput(
+  "valores2", 
+  label = "Selecciona entre viajeros y pernoctaciones:",
+  choices = levels(as.factor(datos$Viajeros.y.pernoctaciones)), 
+  selected = "Viajero"
+)
+```
+
+Column {.tabset}
+-----------------------------
+
+### Diagrama circular
+```{r}
+renderPlot({
+  datos_graficos %>%
+  group_by(Tipo.de.alojamiento) %>%
+  filter(Viajeros.y.pernoctaciones == input$valores2 & Comunidades.y.Ciudades.Autónomas == input$ComunidadAutonoma & Residencia == "Total")%>%
+  dplyr::summarise(viajeros.totales = sum(na.omit(value)))%>%
+  mutate(labels = scales::percent(viajeros.totales/sum(viajeros.totales))) %>%
+  ggplot(aes(x="",y=viajeros.totales,fill=Tipo.de.alojamiento)) +
+    geom_col() +
+  geom_text(aes(x=1.6,label = labels),position = position_stack(vjust = 0.5)) + 
+    coord_polar(theta = "y")
+})
+
+```
+
+
+### Diagrama de barras
+```{r}
+renderPlotly({
+  p <-datos_mapa_calor%>%
+  filter(Tipo.de.alojamiento != "Total", Viajeros.y.pernoctaciones == input$valores2, Comunidades.y.Ciudades.Autónomas != "Total Nacional", Comunidades.y.Ciudades.Autónomas != "18 Ceuta", Comunidades.y.Ciudades.Autónomas != "19 Melilla")%>%
+  ggplot(aes(x= Comunidades.y.Ciudades.Autónomas, y= value, fill = Tipo.de.alojamiento)) +
+  geom_bar(stat="identity") + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+ggplotly(p)
+})
+
+```
+
+### Mapa de calor
+```{r}
+renderPlotly({
+  if(input$valores2 == "Viajero") {
+    p <- geoj.tibble.total %>%
+    filter(Residencia == "Total", Comunidades.y.Ciudades.Autónomas != "Total Nacional", Comunidades.y.Ciudades.Autónomas != "18 Ceuta", Comunidades.y.Ciudades.Autónomas != "19 Melilla", Tipo.de.alojamiento != "Total")%>%
+    ggplot(aes(Tipo.de.alojamiento,Comunidades.y.Ciudades.Autónomas,fill=Numero_viajeros)) + 
+    geom_tile(color = "lightblue",
+            lwd = 0.5,
+            linetype = 1) + 
+    scale_fill_gradientn(colors = brewer.pal(9, 'YlOrRd'), trans = "log")+
+    theme(axis.text.x = element_text(angle = 45,hjust=1))
+    ggplotly(p)
+  } else {
+    p <- geoj.tibble.total %>%
+    filter(Residencia == "Total", Comunidades.y.Ciudades.Autónomas != "Total Nacional", Comunidades.y.Ciudades.Autónomas != "18 Ceuta", Comunidades.y.Ciudades.Autónomas != "19 Melilla", Tipo.de.alojamiento != "Total")%>%
+    ggplot(aes(Tipo.de.alojamiento,Comunidades.y.Ciudades.Autónomas,fill=Numero_pernoctaciones)) + 
+    geom_tile(color = "lightblue",
+            lwd = 0.5,
+            linetype = 1) + 
+    scale_fill_gradientn(colors = brewer.pal(9, 'YlOrRd'), trans = "log")+
+    theme(axis.text.x = element_text(angle = 45,hjust=1))
+    ggplotly(p)
+  }
+  
+})
+```
+
+Series Temporales
+===============================
+
+
+Column {.sidebar data-width=230}
+-----------------------------------------------------------------------
+
+```{r}
+selectInput(
+  "ComunidadAutónoma1", 
+  label = "Comunidad Autónoma 1:", 
+  choices = comunidades, 
+  selected = "Total Nacional"
+)
+
+selectInput(
+  "ComunidadAutónoma2", 
+  label = "Comunidad Autónoma 2:", 
+  choices = comunidades, 
+  selected = "05 Canarias"
+)
+
+selectInput(
+  "Fechainicio", 
+  label = "Fecha inicio:", 
+  choices = fechas, 
+  selected = "2001-01-01"
+)
+
+selectInput(
+  "Fechafinal", 
+  label = "Fecha final:", 
+  choices = fechas, 
+  selected = "2023-12-01"
+)
+
+selectInput(
+  "alojamiento",
+  label = "Tipo de alojamiento",
+  choices = levels(as.factor(datos_serie_temporal$Tipo.de.alojamiento)),
+  selected = "Total"
+)
+```
+
+Column
+--------------------------------------------------
+
+
+###  Viajeros
+
+```{r} 
+highcharter::renderHighchart({
+ tsibble::tsibble(
+  fecha = viajeros_serie_temporal$Periodo[viajeros_serie_temporal$Tipo.de.alojamiento == input$alojamiento],
+  viajero = viajeros_serie_temporal$value[viajeros_serie_temporal$Tipo.de.alojamiento == input$alojamiento],
+  location = viajeros_serie_temporal$Comunidades.y.Ciudades.Autónomas[viajeros_serie_temporal$Tipo.de.alojamiento == input$alojamiento],
+  index = fecha,
+  key = location) %>% 
+    filter(location == input$ComunidadAutónoma1) %>% 
+    filter(fecha >= input$Fechainicio & fecha <= input$Fechafinal) %>% 
+    highcharter::hchart("line",hcaes(x = fecha, y = viajero, group = location))
+})
+```
+
+### Viajeros
+
+```{r} 
+highcharter::renderHighchart({
+ tsibble::tsibble(
+  fecha = viajeros_serie_temporal$Periodo[viajeros_serie_temporal$Tipo.de.alojamiento == input$alojamiento],
+  viajero = viajeros_serie_temporal$value[viajeros_serie_temporal$Tipo.de.alojamiento == input$alojamiento],
+  location = viajeros_serie_temporal$Comunidades.y.Ciudades.Autónomas[viajeros_serie_temporal$Tipo.de.alojamiento == input$alojamiento],
+  index = fecha,
+  key = location) %>% 
+    filter(location == input$ComunidadAutónoma2) %>% 
+    filter(fecha >= input$Fechainicio & fecha <= input$Fechafinal) %>% 
+    highcharter::hchart("line",hcaes(x = fecha, y = viajero, group = location))
+})
+```
+
+Column
+--------------------------------------------------
+
+### Pernoctaciones
+
+```{r} 
+highcharter::renderHighchart({
+ tsibble::tsibble(
+  fecha = pernoctaciones_serie_temporal$Periodo[pernoctaciones_serie_temporal$Tipo.de.alojamiento == input$alojamiento],
+  viajero = pernoctaciones_serie_temporal$value[pernoctaciones_serie_temporal$Tipo.de.alojamiento == input$alojamiento],
+  location = pernoctaciones_serie_temporal$Comunidades.y.Ciudades.Autónomas[pernoctaciones_serie_temporal$Tipo.de.alojamiento == input$alojamiento],
+  index = fecha,
+  key = location) %>% 
+    filter(location == input$ComunidadAutónoma1) %>% 
+    filter(fecha >= input$Fechainicio & fecha <= input$Fechafinal) %>% 
+    highcharter::hchart("line",hcaes(x = fecha, y = viajero, group = location))
+})
+```
+
+### Pernoctaciones
+
+```{r} 
+highcharter::renderHighchart({
+ tsibble::tsibble(
+  fecha = pernoctaciones_serie_temporal$Periodo[pernoctaciones_serie_temporal$Tipo.de.alojamiento == input$alojamiento],
+  viajero = pernoctaciones_serie_temporal$value[pernoctaciones_serie_temporal$Tipo.de.alojamiento == input$alojamiento],
+  location = pernoctaciones_serie_temporal$Comunidades.y.Ciudades.Autónomas[pernoctaciones_serie_temporal$Tipo.de.alojamiento == input$alojamiento],
+  index = fecha,
+  key = location) %>% 
+    filter(location == input$ComunidadAutónoma2) %>% 
+    filter(fecha >= input$Fechainicio & fecha <= input$Fechafinal) %>% 
+    highcharter::hchart("line",hcaes(x = fecha, y = viajero, group = location))
+})
+```
+
+
+
+
+Prediccion Arima y Estacionalidad
+=====================================  
+
+Column {.sidebar data-width=240}
+--------------------------------------------------
+
+```{r}
+
+selectInput(
+  "ComunidadAutonoma", 
+  label = "Selecciona una comunidad autónoma:",
+  choices = levels(as.factor(datos$Comunidades.y.Ciudades.Autónomas)), 
+  selected = "Total Nacional"
+)
+
+selectInput(
+  "valores2", 
+  label = "Selecciona entre viajeros y pernoctaciones:",
+  choices = levels(as.factor(datos$Viajeros.y.pernoctaciones)), 
+  selected = "Viajero"
+)
+
+sliderInput(
+  "años", 
+  label = "Selecciona el número de años para la predicción:",
+  min = 5,
+  max = 30,
+  value = 5
+)
+```
+
+Column {.tabset}
+-----------------------------
+
+### Prediccion
+```{r}
+renderPlot({
+  comunidad <- comunidad %>%
+  mutate(Periodo = yearmonth(Periodo))%>%
+  filter(Comunidades.y.Ciudades.Autónomas == input$ComunidadAutonoma, Viajeros.y.pernoctaciones == input$valores2, Residencia == "Total", Tipo.de.alojamiento == "Total")%>%
+  as_tsibble(index = Periodo, key = Comunidades.y.Ciudades.Autónomas)%>%
+  filter(Periodo >= yearmonth("2022-06-01") | Periodo <= yearmonth("2020-02-01"))%>%
+  fill_gaps()
+
+   comunidad <- comunidad %>%
+   model(ARIMA(value))%>%
+   interpolate(comunidad)
+   
+   comunidad.ARIMA <- comunidad %>%
+   model(ARIMA(value))
+ 
+   comunidad.ARIMA.prediccion <- comunidad.ARIMA %>%
+   forecast(h = paste(input$años, "years"))
+ 
+   comunidad.ARIMA.prediccion%>%
+   autoplot(comunidad%>%
+             filter(as.Date(Periodo)>=yearmonth("2001-01-01")))
+})
+```
+
+
+
+### Estacionalidad
+```{r}
+renderPlot({
+  comunidad <- comunidad %>%
+  mutate(Periodo = yearmonth(Periodo))%>%
+  filter(Comunidades.y.Ciudades.Autónomas == input$ComunidadAutonoma, Viajeros.y.pernoctaciones == input$valores2, Residencia == "Total", Tipo.de.alojamiento == "Total")%>%
+  as_tsibble(index = Periodo, key = Comunidades.y.Ciudades.Autónomas)%>%
+  filter(Periodo >= yearmonth("2022-06-01") | Periodo <= yearmonth("2020-02-01"))%>%
+  fill_gaps()
+
+  comunidad %>% gg_season(value, period = "year")
+})
+```
+
+
+
+Mapa Coroplético
+=========================
+
+Column {.sidebar data-width=240}
+--------------------------------------------------
+
+```{r}
+
+selectInput(
+  "valores", 
+  label = "Selecciona entre viajeros y pernoctaciones:",
+  choices = levels(as.factor(c("Numero_viajeros", "Numero_pernoctaciones"))), 
+  selected = "Viajero"
+)
+
+```
+
+Column
+-----------------------------------------------------------------------
+
+### 
+
+```{r} 
+leaflet::renderLeaflet({
+
+data <- geoj.tibble.total[geoj.tibble.total$Tipo.de.alojamiento == "Total" ,  input$valores]
+
+ etiquetas <-paste("Comunidad Autónoma:", unique(geoj.tibble.total$NAME_1), "<br>Hotel:", geoj.tibble.total[geoj.tibble.total$Tipo.de.alojamiento == "Hoteles",  input$valores],
+                   "<br>Alojamientos de turismo rural:", geoj.tibble.total[geoj.tibble.total$Tipo.de.alojamiento == "Alojamientos de turismo rural",  input$valores], 
+                   "<br>Apartamentos turísticos:", geoj.tibble.total[geoj.tibble.total$Tipo.de.alojamiento == "Apartamentos turísticos" ,  input$valores],
+                   "<br>Campings:", geoj.tibble.total[geoj.tibble.total$Tipo.de.alojamiento == "Campings" ,  input$valores],
+                   "<br>Total:", geoj.tibble.total[geoj.tibble.total$Tipo.de.alojamiento == "Total" ,  input$valores])  %>%
+  lapply(htmltools::HTML)
+
+pal <- leaflet::colorQuantile("YlOrRd", data, n = 9)
+geoj %>%
+  leaflet::leaflet() %>%  
+  leaflet::addPolygons(
+    fillColor = ~pal(data), 
+    weight = 2,
+    opacity = 1,
+    color = "white",
+    dashArray = "3",
+    fillOpacity = 0.7,
+    highlightOptions = leaflet::highlightOptions( 
+      weight = 2,
+      color = rgb(0.2,0.2,0.2),
+      dashArray = "",
+      fillOpacity = 0.7,
+      bringToFront = TRUE
+    ),
+    label = etiquetas 
+  ) %>% 
+  leaflet::addControl(input$valores, position = "topright") %>% 
+  leaflet::addLegend("topright", pal = pal, values = data,
+    title = " ", #input$indicator,
+    labFormat = function(type, cuts, p) {
+          n = length(cuts) 
+          x = (cuts[-n] + cuts[-1])/2
+          x=prettyNum(round(x,digits=2), big.mark = ",", scientific = FALSE)
+          as.character(x)
+        },
+    opacity = 1
+  )
+})
+```
+
+
+Comparación de indicadores
+=============================
+
+Column {.sidebar data-width=230}
+--------------------------------------------------
+
+```{r}
+# Widgets para selección de parámetros 
+selectInput(
+  "x", 
+  label = "Indicator 1:",
+  choices = colnames(viajeros_y_pernoctaciones_analisis_atributos)[-1], 
+  selected = colnames(viajeros_y_pernoctaciones_analisis_atributos)[2]
+)
+
+selectInput(
+  "x_scale", 
+  label = "Scale Transform Indicator 1:",
+  choices = c("none",
+              "sqrt",    
+              "log"
+             ), 
+  selected = "none"
+)
+
+selectInput(
+  "y", 
+  label = "Indicator 2:",
+  choices = colnames(viajeros_y_pernoctaciones_analisis_atributos)[-1], 
+  selected = colnames(viajeros_y_pernoctaciones_analisis_atributos)[3]
+)
+
+selectInput(
+  "y_scale", 
+  label = "Scale Transform Indicator 2:",
+  choices = c("none",
+              "log",
+              "boxcox"
+             ), 
+  selected = "none"
+)
+```
+
+### Results
+
+```{r}
+renderTable({
+   # Creamos una tabla con los 2 indicadores 
+   tb <- tibble(
+      country = viajeros_y_pernoctaciones_analisis_atributos$Comunidades.y.Ciudades.Autónomas,
+      x = viajeros_y_pernoctaciones_analisis_atributos[[which(names(viajeros_y_pernoctaciones_analisis_atributos)==input$x)]],
+      y = viajeros_y_pernoctaciones_analisis_atributos[[which(names(viajeros_y_pernoctaciones_analisis_atributos)==input$y)]]
+    ) 
+    tb <- tb %>% 
+          filter(is.na(x)!=TRUE & is.na(y)!=TRUE )
+  
+  # escalamos los indicadores de acuerdo con los parámetros de escalado   
+  if(input$x_scale=="sqrt") tb$x <- sqrt(tb$x)
+  if(input$x_scale=="log") tb$x <- log(tb$x)  
+  if(input$y_scale=="log") tb$y <- log(tb$y)  
+  if(input$y_scale=="boxcox"){
+    bc <- boxcox (y ~ x,data=tb) # Cálculo óptimo modelo Box-Cox 
+    lambda <- round(bc $ x [which.max (bc $ y)],digits=4)
+    if(lambda!=0){
+      tb$y <- tb$y^lambda/lambda
+    } else {
+      tb$y <- log(tb$y)
+    }
+  }
+  
+  # Cálculo regresión lineal después del escalado de las variables. 
+  fit <- lm(y ~ x,data=tb)
+ 
+  labels <- c("correlation",
+             "linear regression slope",
+             "linear regression independent") 
+  values <- c(round(cor(tb$x,tb$y),digits = 4),
+              fit$coefficients[2],
+              fit$coefficients[1])
+  
+  if(input$y_scale=="boxcox"){ 
+    labels <- append(labels,"boxcox lambda")
+    values <- append(values,round(lambda,digits = 4))
+  }
+    
+  tb2 <- tibble( parameter=labels,
+                 value=values)
+  tb2
+ 
+})
+```
+
+
+
+Column
+--------------------------------------------------
+
+### Scaled Indicators Comparison
+
+```{r} 
+renderPlotly({
+  tb <- tibble(
+      country = viajeros_y_pernoctaciones_analisis_atributos$Comunidades.y.Ciudades.Autónomas,
+      x = viajeros_y_pernoctaciones_analisis_atributos[[which(names(viajeros_y_pernoctaciones_analisis_atributos)==input$x)]],
+      y = viajeros_y_pernoctaciones_analisis_atributos[[which(names(viajeros_y_pernoctaciones_analisis_atributos)==input$y)]]
+    ) 
+    tb <- tb %>% 
+          filter(is.na(x)!=TRUE & is.na(y)!=TRUE )
+    
+  if(input$x_scale=="sqrt") tb$x <- sqrt(tb$x)
+  if(input$x_scale=="log") tb$x <- log(tb$x)  
+    
+  if(input$y_scale=="log") tb$y <- log(tb$y)  
+  if(input$y_scale=="boxcox"){
+    bc <- boxcox (y ~ x,data=tb)
+    lambda <- round(bc $ x [which.max (bc $ y)],digits=4)
+    if(lambda!=0){
+      tb$y <- tb$y^lambda/lambda
+    } else {
+      tb$y <- log(tb$y)
+    }
+  }
+  
+  fit <- lm(y ~ x,data=tb)
+  a <- fit$coefficients[2]
+  b <- fit$coefficients[1]
+  p <- tb %>%
+        ggplot(aes(x,y,color=country)) + 
+        geom_point() +
+        theme(legend.position = "none") +
+        labs(x= input$x, y= input$y)
+  
+  xmin <- layer_scales(p)$x$get_limits()[1]
+  xmax <- layer_scales(p)$x$get_limits()[2]
+  ymin <- layer_scales(p)$y$get_limits()[1]
+  ymax <- layer_scales(p)$y$get_limits()[2]
+  
+  if(a*xmin+b<ymin) xmin <- (ymin-b)/a
+  if(a*xmin+b>ymax) xmin <- (ymax-b)/a
+  if(a*xmax+b<ymin) xmax <- (ymin-b)/a
+  if(a*xmax+b>ymax) xmax <- (ymax-b)/a
+  
+  df <- data.frame(x1 = xmin, x2 = xmax, y1 = a*xmin+b, y2 = a*xmax+b)
+  
+  p2 <- p +
+        geom_segment(aes(x = x1, y = y1, xend = x2, yend = y2, color = "blue"), data = df)
+  ggplotly(p2) 
+  
+})
+```
+
+Column {data-width=400}
+--------------------------------------------------
+
+### Original indicator Values
+
+```{r}
+renderTable({
+  tibble(
+      country = viajeros_y_pernoctaciones_analisis_atributos$Comunidades.y.Ciudades.Autónomas,
+       indicator1 = viajeros_y_pernoctaciones_analisis_atributos[[which(names(viajeros_y_pernoctaciones_analisis_atributos)==input$x)]],
+       indicator2 = viajeros_y_pernoctaciones_analisis_atributos[[which(names(viajeros_y_pernoctaciones_analisis_atributos)==input$y)]]
+    ) %>% 
+      filter(is.na(indicator1)!=TRUE & is.na(indicator2)!=TRUE ) %>%
+      arrange(desc(indicator1)) %>%
+      #setNames(c("country",paste("highest_",input$x),input$y))  %>%
+      head(300)
+})
+```
+

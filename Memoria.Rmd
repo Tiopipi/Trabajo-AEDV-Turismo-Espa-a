@@ -1,0 +1,467 @@
+---
+title: "Memoria AEDV"
+author: "Diego Jesús Torrejón Cabrera"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE,
+  echo=FALSE
+)
+```
+
+```{r}
+library(highcharter) 
+library(fpp3)
+library(RColorBrewer)
+library(leaflet)  
+library(geojsonio) 
+library(plotly)
+library(ggplot2)
+library(tidyverse)
+library(urca)
+library(GGally)
+library(pxR)
+library(patchwork)
+library(DT)
+```
+
+[Enlace al cuadro de mandos](http://10.22.143.222:3838/sample-apps/a2454/Dashboard.Rmd).
+
+
+# Estado Actual y Objetivos
+
+Este proyecto consiste en realizar un análisis de datos del número de viajeros y pernoctaciones en las diferentes comunidades autónomas de España para diferentes tipos de alojamiento a lo largo del siglo XXI, con el objetivo de poder ver como ha evolucionado el turismo en España, y como evolucionará a lo largo de los años. 
+
+# Aportaciones
+
+Este proyecto puede ofrecer información crucial para la planificación estratégica tanto a nivel gubernamental como empresarial en el sector turístico. Comprender cómo ha evolucionado el turismo a lo largo del tiempo permite a las autoridades y empresas anticipar tendencias, identificar oportunidades y abordar desafíos. También puede ayudar a analizar los datos de viajeros y pernoctaciones, identificando patrones de comportamiento y preferencias de los turistas. Esto permite una asignación más eficiente de recursos y una mejor gestión de la capacidad en diferentes destinos y tipos de alojamiento.
+
+
+Por otro lado, los resultados del análisis pueden ser utilizados para promover destinos turísticos menos conocidos que puedan haber experimentado un crecimiento significativo en términos de visitantes y pernoctaciones, lo que contribuye a la diversificación del turismo y a la descongestión de destinos saturados. Además, un turismo próspero impulsa la creación de empleo en una amplia gama de sectores, desde la hostelería y la restauración hasta el transporte y el comercio minorista. Comprender las tendencias turísticas puede ayudar a anticipar la demanda de mano de obra y a desarrollar programas de capacitación adecuados.
+
+
+# Desarrollo
+
+1.Para este análisis, los datos se han sacado del instituto nacional de estadística (INE), cuya fiabilidad por parte de los usuarios es del 99.2%.
+
+# Datos
+
+2.Al cargar los datos nos encontramos con las siguientes variables:
+
+**Periodo:** Fecha en formato yyyyMmm que nos dice cuándo se obtuvieron los valores obtenidos.
+
+**Viajeros y pernoctaciones:** Nos dice si los datos son sobre viajeros, personas que vienen a España a alojarse, o pernoctaciones, número de noches que una persona pasa en un lugar en específico.
+
+**Residencia:** Nos dice cuál es la residencia de las personas que se toman los datos. Pueden ser Total, residentes en España o Residentes en el Extranjero.
+
+**Tipo de alojamiento:** Nos dice el tipo de alojamiento en el que se aloja la persona. Los diferentes tipos son Hoteles, Campings, Apartamentos turísticos, Alojamientos de turismo rural y Albergues.
+
+**Comunidades y ciudades autónomas** Nos dice la comunidad autónoma en la que se ha alojado la persona. Esta variable nos ofrece todas las comunidades autónomas y un total nacional. 
+
+**Value:** Según las combinaciones de las variables anteriores, representa el valor que se obtuvo en la recogida de datos sobre el número de viajeros o pernoctaciones en cada caso.
+
+```{r}
+datos <- read.px("2941.px")
+datos <- datos$DATA$value %>% as_tibble()
+datos <- datos %>% 
+  filter(Tipo.de.alojamiento != "Albergues")%>%
+  mutate(Periodo = ym(Periodo))
+str(datos)
+```
+
+# Procesamiento de datos
+
+3.Dependiendo del análisis que se vaya a realizar de los datos, se han hecho diferentes tablas para las predicciones con ARIMA, para la representación de gráficos, etc. 
+
+Además, al procesar los datos, como las comunidades autónomas de Ceuta y Melilla no dan suficientes datos como para comparar con el resto de comunidades, estas se eliminarán salvo en el mapa coroplético y en las predicciones para esa estas comunidades. Así mismo, se ha eliminado la variable de albergues debido a que prácticamente todos los valores son NA, y a su vez, en según que tabla, se ha añadido a la variable Tipo de alojamiento el tipo "total" que es el total de valores para los diferentes tipos de alojamiento.
+
+Para este análisis, no se va a tener en cuenta si los que vienen a España son españoles o extranjeros.
+
+```{r}
+datos_serie_temporal <- datos %>% 
+  filter(Comunidades.y.Ciudades.Autónomas != "19 Melilla" & Comunidades.y.Ciudades.Autónomas != "18 Ceuta")
+tabla_alojamientos <- datos_serie_temporal %>% 
+  pivot_wider( names_from = Tipo.de.alojamiento, values_from = value)
+tabla_alojamientos$Total = rowSums(tabla_alojamientos[, 5:8, drop = F], na.rm = T)
+datos_serie_temporal <- tabla_alojamientos %>%
+  pivot_longer(c(Hoteles, Campings, `Apartamentos turísticos`, `Alojamientos de turismo rural`, Total), names_to = "Tipo.de.alojamiento", values_to = "value")
+datos_serie_temporal <- datos_serie_temporal %>%
+  filter(Comunidades.y.Ciudades.Autónomas != "19 Melilla")
+datos_serie_temporal$Comunidades.y.Ciudades.Autónomas <- factor(datos_serie_temporal$Comunidades.y.Ciudades.Autónomas)
+datos_serie_temporal$Comunidades.y.Ciudades.Autónomas <- droplevels(datos_serie_temporal$Comunidades.y.Ciudades.Autónomas)
+
+viajeros_serie_temporal <- datos_serie_temporal %>%
+  filter(Viajeros.y.pernoctaciones == "Viajero", Residencia == "Total", Tipo.de.alojamiento=="Total")
+
+pernoctaciones_serie_temporal <- datos_serie_temporal %>%
+  filter(Viajeros.y.pernoctaciones == "Pernoctaciones", Residencia == "Total", Tipo.de.alojamiento=="Total")
+```
+
+```{r}
+datos_mapa_calor <- datos
+tabla_alojamientos <- datos_mapa_calor %>% 
+  pivot_wider( names_from = Tipo.de.alojamiento, values_from = value)
+tabla_alojamientos$Total = rowSums(tabla_alojamientos[, 5:8, drop = F], na.rm = T)
+datos_mapa_calor <- tabla_alojamientos %>%
+  pivot_longer(c(Hoteles, Campings, `Apartamentos turísticos`, `Alojamientos de turismo rural`, Total), names_to = "Tipo.de.alojamiento", values_to = "value")
+
+viajeros_mapa_calor <- datos_mapa_calor %>%
+  filter(Viajeros.y.pernoctaciones == "Viajero", Residencia == "Total", Comunidades.y.Ciudades.Autónomas != "Total Nacional")%>%
+  group_by(Comunidades.y.Ciudades.Autónomas, Tipo.de.alojamiento)%>%
+  dplyr::summarise(
+    Viajeros.y.pernoctaciones = first(Viajeros.y.pernoctaciones),
+    Residencia = first(Residencia),
+    Numero_viajeros = sum(na.omit(value))
+  )
+
+pernoctaciones_mapa_calor <- datos_mapa_calor %>%
+  filter(Viajeros.y.pernoctaciones == "Pernoctaciones", Residencia == "Total", Comunidades.y.Ciudades.Autónomas != "Total Nacional")%>%
+  group_by(Comunidades.y.Ciudades.Autónomas, Tipo.de.alojamiento)%>%
+  dplyr::summarise(
+    Viajeros.y.pernoctaciones = first(Viajeros.y.pernoctaciones),
+    Residencia = first(Residencia),
+    Numero_pernoctaciones = sum(na.omit(value))
+  )
+```
+
+```{r}
+datos_analisis_atributos <- datos %>% 
+  filter(Comunidades.y.Ciudades.Autónomas != "19 Melilla" & Comunidades.y.Ciudades.Autónomas != "18 Ceuta")
+tabla_alojamientos <- datos_analisis_atributos %>% 
+  pivot_wider( names_from = Tipo.de.alojamiento, values_from = value)
+tabla_alojamientos$Total = rowSums(tabla_alojamientos[, 5:8, drop = F], na.rm = T)
+datos_analisis_atributos <- tabla_alojamientos %>%
+  pivot_longer(c(Hoteles, Campings, `Apartamentos turísticos`, `Alojamientos de turismo rural`, Total), names_to = "Tipo.de.alojamiento", values_to = "value")
+
+viajeros_analisis_atributos <- datos_analisis_atributos %>%
+  filter(Viajeros.y.pernoctaciones == "Viajero", Residencia == "Total", Comunidades.y.Ciudades.Autónomas != "Total Nacional")%>%
+  group_by(Comunidades.y.Ciudades.Autónomas, Tipo.de.alojamiento)%>%
+  dplyr::summarise(
+    Numero_viajeros = sum(na.omit(value))
+  ) %>%
+  pivot_wider( names_from = Tipo.de.alojamiento, values_from = Numero_viajeros) %>%
+  dplyr::rename(Hoteles_viajeros=Hoteles, `Alojamientos de turismo rural viajeros` = `Alojamientos de turismo rural`, `Apartamentos turísticos viajeros` = `Apartamentos turísticos`, Campings_viajeros = Campings, Total_viajeros = Total)
+
+pernoctaciones_analisis_atributos <- datos_analisis_atributos %>%
+  filter(Viajeros.y.pernoctaciones == "Pernoctaciones", Residencia == "Total", Comunidades.y.Ciudades.Autónomas != "Total Nacional")%>%
+  group_by(Comunidades.y.Ciudades.Autónomas, Tipo.de.alojamiento)%>%
+  dplyr::summarise(
+    Numero_pernoctaciones = sum(na.omit(value))
+  ) %>%
+  pivot_wider( names_from = Tipo.de.alojamiento, values_from = Numero_pernoctaciones) %>%
+  dplyr::rename(Hoteles_pernoctaciones=Hoteles, `Alojamientos de turismo rural pernoctaciones` = `Alojamientos de turismo rural`, `Apartamentos turísticos pernoctaciones` = `Apartamentos turísticos`, Campings_pernoctaciones = Campings, Total_pernoctaciones = Total)
+
+viajeros_y_pernoctaciones_analisis_atributos <- left_join(viajeros_analisis_atributos, pernoctaciones_analisis_atributos, by="Comunidades.y.Ciudades.Autónomas")
+```
+
+```{r}
+comunidad <- datos
+tabla_alojamientos <- comunidad %>% 
+  pivot_wider( names_from = Tipo.de.alojamiento, values_from = value)
+tabla_alojamientos$Total = rowSums(tabla_alojamientos[, 5:8, drop = F], na.rm = T)
+comunidad <- tabla_alojamientos %>%
+  pivot_longer(c(Hoteles, Campings, `Apartamentos turísticos`, `Alojamientos de turismo rural`, Total), names_to = "Tipo.de.alojamiento", values_to = "value")
+```
+
+```{r}
+datos_graficos <- datos %>% 
+  filter(Comunidades.y.Ciudades.Autónomas != "19 Melilla" & Comunidades.y.Ciudades.Autónomas != "18 Ceuta")
+```
+
+4.A continucación voy a mostrar diferentes gráficas necesarias par el análisis de los datos.
+
+**Diagrama circular sobre como se reparten los viajeros en los diferentes tipos de alojamientos**
+```{r}
+datos_graficos %>%
+  group_by(Tipo.de.alojamiento) %>%
+  filter(Viajeros.y.pernoctaciones == "Viajero" & Comunidades.y.Ciudades.Autónomas == "Total Nacional" & Residencia == "Total")%>%
+  dplyr::summarise(viajeros.totales = sum(na.omit(value)))%>%
+  mutate(labels = scales::percent(viajeros.totales/sum(viajeros.totales))) %>%
+  ggplot(aes(x="",y=viajeros.totales,fill=Tipo.de.alojamiento)) +
+    geom_col() +
+  geom_text(aes(x=1.6,label = labels),position = position_stack(vjust = 0.5)) + 
+    coord_polar(theta = "y")
+```
+
+**Diagrama circular sobre como se reparten las pernoctaciones en los diferentes tipos de alojamientos**
+```{r}
+datos_graficos %>%
+  group_by(Tipo.de.alojamiento) %>%
+  filter(Viajeros.y.pernoctaciones == "Pernoctaciones" & Comunidades.y.Ciudades.Autónomas == "Total Nacional" & Residencia == "Total")%>%
+  dplyr::summarise(viajeros.totales = sum(na.omit(value)))%>%
+  mutate(labels = scales::percent(viajeros.totales/sum(viajeros.totales))) %>%
+  ggplot(aes(x="",y=viajeros.totales,fill=Tipo.de.alojamiento)) +
+    geom_col() +
+  geom_text(aes(x=1.6,label = labels),position = position_stack(vjust = 0.5)) + 
+    coord_polar(theta = "y")
+```
+
+Estos diagramas circulares representan el número de viajeros o pernoctaciones que se alojan en cada tipo de alojamiento en toda España. Como podemos ver, los hoteles son los tipos de alojamiento más frecuentados por los viajeros que vienen a España. Le siguen los apartamentos turísticos, aunque hay un gran margen. Sin embargo, si vamos al dashboard y ponemos comunidades que destacan por su naturaleza, como es el caso de Cantabria, vemos que aumenta notablemente los viajeros que prefieren alojarse en campings o en alojamientos de turismo rural. Por otro lado, si nos fijamos en Canarias, vemos que los apartamentos turísticos reciben un gran número de viajeros en comparación con otras comunidades.
+
+**Diagrama de barras dinámico sobre el tipo de alojamiento predominante según el número de viajeros en cada comunidad**
+
+```{r}
+p <-datos_mapa_calor%>%
+  filter(Tipo.de.alojamiento != "Total", Viajeros.y.pernoctaciones == "Viajero", Comunidades.y.Ciudades.Autónomas != "Total Nacional", Comunidades.y.Ciudades.Autónomas != "18 Ceuta", Comunidades.y.Ciudades.Autónomas != "19 Melilla")%>%
+  ggplot(aes(x= Comunidades.y.Ciudades.Autónomas, y= value, fill = Tipo.de.alojamiento)) +
+  geom_bar(stat="identity") + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+ggplotly(p)
+```
+
+**Diagrama de barras dinámico sobre el tipo de alojamiento predominante según el número de pernoctaciones en cada comunidad**
+
+```{r}
+p <-datos_mapa_calor%>%
+  filter(Tipo.de.alojamiento != "Total", Viajeros.y.pernoctaciones == "Viajero", Comunidades.y.Ciudades.Autónomas != "Total Nacional", Comunidades.y.Ciudades.Autónomas != "18 Ceuta", Comunidades.y.Ciudades.Autónomas != "19 Melilla")%>%
+  ggplot(aes(x= Comunidades.y.Ciudades.Autónomas, y= value, fill = Tipo.de.alojamiento)) +
+  geom_bar(stat="identity") + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+ggplotly(p)
+```
+
+
+
+En estos diagramas de barras podemos ver claramente el número de viajeros y pernoctaciones por comunidad y como se reparten según el tipo de alojamiento. Vemos que comunidades como Andalucía o Cataluña son las que más viajeros reciben. Además, como ya sabíamos del diagrama circular anterior, en todas las comunidades autónomas los viajeros prefieren los hoteles antes que el resto de tipo de alojamiento.
+
+A continuación se graficarán las series temporales y predicciones basándose en el total  nacional. Si se quisiese ver para cada comunidad, se puede acceder al cuadro de mandos. Además, en el cuadro de mandos tambien tenemos la opción de elegir la fecha entre las que representar la serie temporal, elegir el tipo de alojamiento, o incluso elegir el números de años para los que se quiere realizar la predicción.
+
+**Serie temporal del número de viajeros y pernoctaciones en España**
+
+```{r}
+tabla_filtrada <- datos_serie_temporal %>%
+  filter(Comunidades.y.Ciudades.Autónomas == "Total Nacional" & Tipo.de.alojamiento == "Total" & Residencia == "Total")
+
+tsibble::tsibble(
+  fecha = tabla_filtrada$Periodo,
+  viajero = tabla_filtrada$value,
+  location = tabla_filtrada$Viajeros.y.pernoctaciones,
+  index = fecha,
+  key = location) %>% 
+    highcharter::hchart("line",hcaes(x = fecha, y = viajero, group = location))
+```
+
+En esta serie temporal podemos ver la evolución de la llegada de viajeros a España a lo largo de este siglo, así como el número de noches que se quedan a dormir, y podemos ver como, hasta el año del covid, el total de viajeros que llegaban a España solía incrementar poco a poco. En la pandemia, como es de esperar, hubo un bajón pero en estos dos últimos años se ha recuperado los valores pre-pandemia. Si fuéramos comunidad por comunidad en el dashboar, veríamos como todas recuperaron los viajeros que solían tener antes de la pandemia, aunque unas tardaron más que otras en recuperarlos.
+
+**Estacionalidad del número de viajeros en España**
+
+```{r}
+comunidad.estacionalidad <- comunidad %>%
+  mutate(Periodo = yearmonth(Periodo))%>%
+  filter(Comunidades.y.Ciudades.Autónomas == "Total Nacional", Viajeros.y.pernoctaciones == "Viajero", Residencia == "Total", Tipo.de.alojamiento == "Total")%>%
+  as_tsibble(index = Periodo, key = Comunidades.y.Ciudades.Autónomas)%>%
+  filter(Periodo >= yearmonth("2022-06-01") | Periodo <= yearmonth("2020-02-01"))%>%
+  fill_gaps()
+
+  comunidad.estacionalidad %>% gg_season(value, period = "year")
+```
+
+**Estacionalidad del número de pernoctaciones en España**
+
+```{r}
+comunidad.estacionalidad <- comunidad %>%
+  mutate(Periodo = yearmonth(Periodo))%>%
+  filter(Comunidades.y.Ciudades.Autónomas == "Total Nacional", Viajeros.y.pernoctaciones == "Pernoctaciones", Residencia == "Total", Tipo.de.alojamiento == "Total")%>%
+  as_tsibble(index = Periodo, key = Comunidades.y.Ciudades.Autónomas)%>%
+  filter(Periodo >= yearmonth("2022-06-01") | Periodo <= yearmonth("2020-02-01"))%>%
+  fill_gaps()
+
+  comunidad.estacionalidad %>% gg_season(value, period = "year")
+```
+
+Estas gráficas representan la estacionalidad en España de la llegadas de viajeros y pernoctaciones, evitando las fechas del covid. Como podemos ver, el número de viajeros a lo largo de los años tiende a subir, al igual que el de las pernoctaciones. Además, vemos que en los diferentes años, es en agosto cuando se alcanzan los máximos valores de estos datos, y en los meses de Navidad los mínimos. Si nos fijamos en el caso particular de Madrid en el Dashboard, vemos como no hay grandes diferencias entre los diferentes meses. Lo que vemos son pocas variaciones en el número de viajeros que van a Madrid. De hecho, vemos como en los meses de verano, este número tiende a disminuir y, una vez acaba, vuelve a subir. 
+
+**Evolución del número de viajeros en España para cada mes por años**
+
+```{r fig.width=12}
+comunidad.estacionalidad <- comunidad %>%
+  mutate(Periodo = yearmonth(Periodo))%>%
+  filter(Comunidades.y.Ciudades.Autónomas == "Total Nacional", Viajeros.y.pernoctaciones == "Viajero", Residencia == "Total", Tipo.de.alojamiento == "Total")%>%
+  as_tsibble(index = Periodo, key = Comunidades.y.Ciudades.Autónomas)%>%
+  filter(Periodo >= yearmonth("2022-06-01") | Periodo <= yearmonth("2020-02-01"))%>%
+  fill_gaps()
+
+comunidad.estacionalidad %>% 
+gg_subseries(value, period = "year") 
+```
+
+**Evolución del número de viajeros en España para cada mes por años**
+
+```{r fig.width=12}
+comunidad.estacionalidad <- comunidad %>%
+  mutate(Periodo = yearmonth(Periodo))%>%
+  filter(Comunidades.y.Ciudades.Autónomas == "Total Nacional", Viajeros.y.pernoctaciones == "Pernoctaciones", Residencia == "Total", Tipo.de.alojamiento == "Total")%>%
+  as_tsibble(index = Periodo, key = Comunidades.y.Ciudades.Autónomas)%>%
+  filter(Periodo >= yearmonth("2022-06-01") | Periodo <= yearmonth("2020-02-01"))%>%
+  fill_gaps()
+
+comunidad.estacionalidad %>% 
+gg_subseries(value, period = "year") 
+```
+
+El objetivo de estas gráficas es representar la evolución de la llegada de viajeros a España en los diferentes meses por año, evitando los años del Covid. Como podemos ver, tanto el número de viajeros como de pernoctaciones tiende a subir. Sin embargo, vemos como en los años de la crisis financiera del 2008 existe una bajada de este número, pero una vez fue superada la crisis, todo volvió a la normalidad.
+
+**Descomposición STL para el número de viajeros en España**
+
+```{r}
+comunidad.estacionalidad <- comunidad %>%
+  mutate(Periodo = yearmonth(Periodo))%>%
+  filter(Comunidades.y.Ciudades.Autónomas == "Total Nacional", Viajeros.y.pernoctaciones == "Viajero", Residencia == "Total", Tipo.de.alojamiento == "Total")%>%
+  as_tsibble(index = Periodo, key = Comunidades.y.Ciudades.Autónomas)%>%
+  fill_gaps()
+
+comunidad.estacionalidad |>
+  model(
+    STL(value ~ season(period = 12),
+    robust = TRUE)
+  ) |>
+  components() |>
+  autoplot()
+```
+
+**Descomposición STL para el número de pernoctaciones en España**
+
+```{r}
+comunidad.estacionalidad <- comunidad %>%
+  mutate(Periodo = yearmonth(Periodo))%>%
+  filter(Comunidades.y.Ciudades.Autónomas == "Total Nacional", Viajeros.y.pernoctaciones == "Pernoctaciones", Residencia == "Total", Tipo.de.alojamiento == "Total")%>%
+  as_tsibble(index = Periodo, key = Comunidades.y.Ciudades.Autónomas)%>%
+  fill_gaps()
+
+comunidad.estacionalidad |>
+  model(
+    STL(value ~ season(period = 12),
+    robust = TRUE)
+  ) |>
+  components() |>
+  autoplot()
+```
+
+He usado el modelo de descomposición STL  para gestionar la estacionalidad de la llegada de viajeros a España y el número de noches que pasan. En la primera gráfica podemos ver la serie temporal que vimos anteriormente, con una fuerte bajada en los años del Covid, a continuación vemos que la tendencia es de que suban el número de llegadas, habiendo una pequeña bajada en los años de la crisis. En la tercera gráfica se observa una clara estacionalidad de los datos, y por último tenemos el error en descomposición cometido por el modelo. Obviamente se observa un error en los años del Covid, por lo que al hacer la predicción, estos datos se sustituirán por unos datos que simulan como habrían sido si no hubiese habido una pandemia.
+
+**Predicción de modelo ARIMA del número de viajeros para los próximos 5 años**
+
+```{r}
+comunidad.prediccion <- comunidad %>%
+  mutate(Periodo = yearmonth(Periodo))%>%
+  filter(Comunidades.y.Ciudades.Autónomas == "Total Nacional", Viajeros.y.pernoctaciones == "Viajero", Residencia == "Total", Tipo.de.alojamiento == "Total")%>%
+  as_tsibble(index = Periodo, key = Comunidades.y.Ciudades.Autónomas)%>%
+  filter(Periodo >= yearmonth("2022-06-01") | Periodo <= yearmonth("2020-02-01"))%>%
+  fill_gaps()
+
+   comunidad.prediccion <- comunidad.prediccion %>%
+   model(ARIMA(value))%>%
+   interpolate(comunidad.prediccion)
+   
+   comunidad.ARIMA <- comunidad.prediccion %>%
+   model(ARIMA(value))
+ 
+   comunidad.ARIMA.prediccion <- comunidad.ARIMA %>%
+   forecast(h = paste(5, "years"))
+ 
+   comunidad.ARIMA.prediccion%>%
+   autoplot(comunidad.prediccion%>%
+             filter(as.Date(Periodo)>=yearmonth("2001-01-01")))
+
+```
+
+**Predicción de modelo ARIMA del número de perncoctaciones para los próximos 5 años**
+
+```{r}
+comunidad.prediccion <- comunidad %>%
+  mutate(Periodo = yearmonth(Periodo))%>%
+  filter(Comunidades.y.Ciudades.Autónomas == "Total Nacional", Viajeros.y.pernoctaciones == "Pernoctaciones", Residencia == "Total", Tipo.de.alojamiento == "Total")%>%
+  as_tsibble(index = Periodo, key = Comunidades.y.Ciudades.Autónomas)%>%
+  filter(Periodo >= yearmonth("2022-06-01") | Periodo <= yearmonth("2020-02-01"))%>%
+  fill_gaps()
+
+   comunidad.prediccion <- comunidad.prediccion %>%
+   model(ARIMA(value))%>%
+   interpolate(comunidad.prediccion)
+   
+   comunidad.ARIMA <- comunidad.prediccion %>%
+   model(ARIMA(value))
+ 
+   comunidad.ARIMA.prediccion <- comunidad.ARIMA %>%
+   forecast(h = paste(5, "years"))
+ 
+   comunidad.ARIMA.prediccion%>%
+   autoplot(comunidad.prediccion%>%
+             filter(as.Date(Periodo)>=yearmonth("2001-01-01")))
+
+```
+
+
+Estas dos últimas gráficas representan una predicción del número de viajeros y pernoctaciones en España para los próximos 5 años usando el modelo ARIMA, evitando los datos de la pandemia. Como podemos ver, al haber evitado los datos de la época del covid y sustituirlos por los que podrían haber sido con la función interpolate, conseguimos una buena predicción del número de viajeros y pernoctaciones, la cual nos dice que año a año el número de estos irá aumentando poco a poco. Si quisiéramos ver como sería una predicción para los próximos 30, vamos al dashboard y vemos como la predicción sigue siendo buena y tendente a aumentar los valores comentados. Sin embargo, si quisiésemos hacer una predicción para Canarias, la obtenida no es muy fiable ya que los intervalos de confianza son demasiado grandes.
+
+
+Ahora voy realizar un análisis de atributos.
+
+**Matriz de correlación**
+
+```{r}
+viajeros_y_pernoctaciones_analisis_atributos %>%
+  ungroup()%>%
+  dplyr::select(-Comunidades.y.Ciudades.Autónomas)%>%
+  cor(use='complete.obs') %>% 
+  hchart() 
+```
+
+En la matriz de correlación observamos el valor de correlación para cada par de atributos. En el caso particular de esta colección de atributos, observamos que hay fuertes relaciones positivas entre el número de viajeros y pernoctaciones para el mismo tipo de alojamiento. Esto se debe a que existe una relación entre el número de viajeros y las noches que pasan los viajeros en ese tipo de alojamiento. Además, también hay una fuerte correlación positiva entre viajeros_total y hoteles_total. Esto probablemente se deba a que la mayoría de viajeros elijen hoteles como tipo de alojamiento 
+
+```{r}
+data <- viajeros_y_pernoctaciones_analisis_atributos %>%
+  column_to_rownames(var="Comunidades.y.Ciudades.Autónomas")
+pca <- prcomp(data, scale = T)
+```
+
+**Porcentaje de varianza explicada por las componentes principales**
+
+```{r}
+p <- tibble(
+  label=fct_inorder(paste("PC",1:length(pca$sdev))),
+  varPercent = pca$sdev^2/sum(pca$sdev^2) * 100 
+) %>%
+  ggplot(aes(x=label,y=varPercent)) + 
+    geom_bar(stat = "identity") +
+    labs(x= "Componentes Principales", 
+         y= "Porcentaje varianza explicada")
+ggplotly(p) 
+```
+
+Esta gráfica nos permite observar la varianza explicada por cada componente principal respecto al total de varianzas acumuladas por todas las variables. Observamos que la PC1 explica el 57% de la varianza total, y a partir de la PC1 ya baja bastante. Si utilizamos el criterio de quedarnos solo con las componentes principales que expliquen al menos el 2% de la varianza total, podríamos eliminar las 6 últimas PC.
+
+**Gráfico de dispersión con las dos primeras componentes**
+
+```{r}
+hchart(pca)
+```
+
+En esta gráfica observamos algunas pequeñas aglomeraciones de puntos, en esos casos sería difícil identificar a las comunidades autónomas en función de los valores de PC1 y PC2, por lo que decimos que no tienen un buen poder discriminante. Por otro lado, como casi todos los vectores tienen alta componente horizontal negativa, ello nos indica que las variables como Total_viajeros tienen mucho más peso a la hora de calcular la primera componente que la segunda.
+
+# Conclusiones y trabajos futuros
+
+**Resultados:**
+
+Los resultados obtenidos de este análisis son bastante reveladores en cuanto a la evolución del turismo en España a lo largo del tiempo. Aquí hay algunos hallazgos clave:
+
+**Tendencias generales de alojamiento:** Los hoteles son el tipo de alojamiento más frecuentado por los viajeros que visitan España, seguidos de cerca por los apartamentos turísticos. Sin embargo, al profundizar en datos específicos por comunidad autónoma, se observa una variabilidad significativa en las preferencias de alojamiento, con destinos naturales como Cantabria que muestran una preferencia por campings y alojamientos rurales. Esto puede resultar de gran utilidad a aquellas compañías turísticas que desean construir alojamientos en sitios donde los hoteles no tienen un gran impacto con respecto al resto de tipos. Por ejemplo, si no saben si contruir un hotel o apartamento en Canarias, tras realizar este análisis puede tomar una decisión fundamentada.
+
+**Impacto de la pandemia de COVID-19:** Se evidencia un impacto significativo de la pandemia en el turismo español, con una disminución notable en el número de viajeros y pernoctaciones durante los años de la crisis sanitaria. Sin embargo, se observa una recuperación gradual en los años posteriores, indicando una tendencia hacia la normalización. Esto confirma que, una vez pasado los años de pandemia, los efectos del covid no afectaron en gran medida al futuro del turismo en España.
+
+**Estacionalidad del turismo:** Se identifica una estacionalidad marcada en la llegada de viajeros y el número de pernoctaciones, con picos durante los meses de verano y mínimos durante las épocas de Navidad. Esta estacionalidad se mantiene consistente a lo largo de los años, lo que sugiere una planificación estratégica importante para gestionar la demanda turística en diferentes momentos del año.
+
+**Predicciones futuras:** Utilizando modelos ARIMA, se realizaron predicciones del número de viajeros y pernoctaciones para los próximos años. Estas predicciones sugieren un crecimiento continuo en el turismo español, con una recuperación gradual de los niveles pre-pandémicos y una tendencia al alza en los años venideros.
+
+**Análisis de atributos:** Se realizó un análisis de atributos para identificar relaciones entre diferentes variables, como el número de viajeros y pernoctaciones por tipo de alojamiento y comunidad autónoma. Se encontraron correlaciones positivas entre el número de viajeros y pernoctaciones en el mismo tipo de alojamiento, así como una fuerte correlación entre el número total de viajeros y los hoteles, lo que sugiere una preferencia generalizada por este tipo de alojamiento.
+
+**Grado de Consecución de los Objetivos:**
+
+En general, hemos logrado cumplir con los objetivos establecidos para este proyecto. Hemos analizado los datos disponibles, identificado tendencias significativas y utilizado modelos predictivos para proyectar el futuro del turismo en España. 
+
+Posibles Extensiones:
+
+Podríamos ampliar nuestro análisis incluyendo más variables relevantes, como datos económicos, eventos culturales o condiciones climáticas, para obtener una imagen más completa del turismo en España.También se podría realizar un estudio de segmentación basados en características similares, comportamientos de viaje, preferencias y necesidades  (como por ejemplo edad, género, comportamiento de viaje...) para identificar diferentes tipos de turistas y sus preferencias, lo que podría ayudar a personalizar las estrategias de marketing y promoción.
